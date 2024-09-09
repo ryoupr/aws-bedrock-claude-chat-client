@@ -70,17 +70,9 @@ class ChatGUI:
         )
         self.send_button.grid(row=1, column=1, padx=10, pady=10)
 
-        # コピーボタン (クリップボードにコピーするボタン)
-        self.copy_button = ttk.Button(
-            root, text="コードをコピー", command=self.copy_to_clipboard
-        )
-        self.copy_button.grid(row=2, column=1, padx=10, pady=10)
-
         # ウィンドウ内のグリッドのサイズを柔軟に
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
-
-        self.code_text = ""  # コードブロックのテキストを保存する変数
 
     # チャットにメッセージを追加する関数（区切り線追加）
     def add_message(self, message, sender):
@@ -114,12 +106,6 @@ class ChatGUI:
         self.chat_area.config(state="disabled")
         self.chat_area.yview(tk.END)
 
-    # コピーボタンが押されたときの処理
-    def copy_to_clipboard(self):
-        pyperclip.copy(
-            self.code_text
-        )  # クリップボードにコードブロックのテキストをコピー
-
     # Ctrl + Enterが押されたときの処理
     def ctrl_enter_pressed(self, event):
         self.start_async_send_message()
@@ -127,6 +113,8 @@ class ChatGUI:
 
     # メッセージ送信時の非同期処理を開始する
     def start_async_send_message(self):
+        # 送信ボタンを無効化
+        self.send_button.config(state="disabled")
         Thread(target=self.async_send_message).start()
 
     # 非同期でメッセージ送信処理を実行する
@@ -154,6 +142,9 @@ class ChatGUI:
             self.chat_area.config(state="normal")
             self.chat_area.delete("end-2l", "end-1l")  # 読み込み中...の行を削除
             self.chat_area.config(state="disabled")
+
+        # 全ての処理が終わった後に送信ボタンを再度有効化
+        self.send_button.config(state="normal")
 
 
 if __name__ == "__main__":
