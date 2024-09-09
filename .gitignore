@@ -1,3 +1,7 @@
 .venv
 
 log/chat_logs/*
+
+
+!log
+!chat_logs

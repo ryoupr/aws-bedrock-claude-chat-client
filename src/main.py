@@ -1,4 +1,4 @@
-from chat_claud import chat_claud
+from chat_claude import chat_claud
 
 
 def main():
