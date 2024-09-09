@@ -1,10 +1,12 @@
-from chat_claude import chat_claud
+import tkinter as tk
+
+from chat_interface import ChatGUI
 
 
 def main():
-    user_prompt = input("> ")
-    res = chat_claud(user_prompt=user_prompt)
-    print(res)
+    root = tk.Tk()
+    ChatGUI(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
