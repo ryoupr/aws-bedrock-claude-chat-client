@@ -1,12 +1,8 @@
-import tkinter as tk
-
-from chat_interface import ChatGUI
+from chat_interface import launch_gui_window
 
 
 def main():
-    root = tk.Tk()
-    ChatGUI(root)
-    root.mainloop()
+    launch_gui_window()
 
 
 if __name__ == "__main__":
