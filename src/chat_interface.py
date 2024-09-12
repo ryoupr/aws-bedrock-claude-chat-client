@@ -1,153 +1,175 @@
-import asyncio
-import tkinter as tk
-import tkinter.font as tkFont
-from threading import Thread
-from tkinter import scrolledtext, ttk
+import sys
 
-import pyperclip  # クリップボードにコピーするためのライブラリ
 from langchain.memory import ConversationBufferMemory
+from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMainWindow,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
-from chat_claude import chat_claude  # ここでstreamバージョンをインポート
+from chat_claude import chat_claude
 
 memory = ConversationBufferMemory()
 
 
-# チャット画面を作るクラス
-class ChatGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("AI Chat")
+class WorkerThread(QtCore.QThread):
+    update_signal = QtCore.pyqtSignal(str)
 
-        # モダンなテーマを設定
-        style = ttk.Style()
-        style.theme_use("clam")  # clam, alt, defaultなど他のテーマも試せます
+    def __init__(self, user_message):
+        super().__init__()
+        self.user_message = user_message
+        self.response_buffer = ""
 
-        # ウィンドウのリサイズを許可
-        self.root.resizable(True, True)
+    def run(self):
+        chat_claude(self.user_message, memory, self.stream_response_update)
+        # レスポンスが途中で途切れないよう、最後の残りのバッファを送信
+        if self.response_buffer:
+            self.update_signal.emit(self.response_buffer)
+
+    def stream_response_update(self, response_chunk):
+        self.response_buffer += response_chunk
+        if len(self.response_buffer) > 10 or "\n" in response_chunk:
+            self.update_signal.emit(self.response_buffer)
+            self.response_buffer = ""  # バッファをクリア
+
+
+class ChatWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("AI Chat with Claude - PyQt5")
+        self.setGeometry(100, 100, 600, 400)
+
+        # メッセージ送信中かどうかのフラグ
+        self.is_sending = False
+
+        # Main widget and layout
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
+
+        # モダンなスタイルシートを定義
+        self.setStyleSheet(
+            """
+            QMainWindow {
+                background-color: #2c3e50;
+            }
+            QTextEdit {
+                background-color: #34495e;
+                color: white;
+                border-radius: 5px;
+                padding: 10px;
+                font-family: 'Helvetica Neue', Arial, sans-serif;
+                font-size: 14px;
+            }
+            QPushButton {
+                background-color: #1abc9c;
+                color: white;
+                border-radius: 5px;
+                padding: 10px;
+                font-family: 'Helvetica Neue', Arial, sans-serif;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #16a085;
+            }
+        """
+        )
 
         # フォント設定
-        font_style = tkFont.Font(family="Helvetica", size=12)
+        self.user_font = QtGui.QFont("Helvetica Neue", 12)
+        self.ai_font = QtGui.QFont("Helvetica Neue", 12)
+        self.input_font = QtGui.QFont("Helvetica Neue", 12)
 
-        # チャットエリア
-        self.chat_area = scrolledtext.ScrolledText(
-            root,
-            wrap=tk.WORD,
-            state="disabled",
-            width=50,
-            height=20,
-            font=font_style,
-            bg="#f0f0f0",
-            relief="flat",
+        # Scroll area for messages
+        self.chat_area = QTextEdit(self)
+        self.chat_area.setReadOnly(True)
+        self.chat_area.setFont(self.ai_font)
+        self.layout.addWidget(self.chat_area)
+
+        # Input field for the user's message
+        self.input_area = QTextEdit(self)
+        self.input_area.setFont(self.input_font)
+        self.input_area.setFixedHeight(30)
+        self.input_area.textChanged.connect(self.adjust_input_area_height)
+        self.layout.addWidget(self.input_area)
+
+        # Send button
+        self.send_button = QPushButton("Send", self)
+        self.send_button.setFont(self.input_font)
+        self.send_button.clicked.connect(self.start_worker_thread)
+        self.layout.addWidget(self.send_button)
+
+        self.input_area.setPlaceholderText(
+            "Type your message here and press Ctrl + Enter to send..."
         )
-        self.chat_area.grid(
-            row=0, column=0, padx=10, pady=10, columnspan=2, sticky="nsew"
-        )
+        self.input_area.setFocus()
 
-        # プロンプト入力エリア (ttkを使ったよりモダンなスタイル)
-        self.input_area = tk.Text(
-            root,
-            height=3,
-            width=40,
-            font=font_style,
-            bg="#ffffff",
-            relief="solid",
-            bd=1,
-        )
-        self.input_area.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+    def keyPressEvent(self, event):
+        if (
+            event.key() == QtCore.Qt.Key_Return
+            and event.modifiers() == QtCore.Qt.ControlModifier
+        ):
+            self.start_worker_thread()
+        elif event.key() == QtCore.Qt.Key_Return:
+            cursor = self.input_area.textCursor()
+            cursor.insertText("\n")
+        else:
+            super().keyPressEvent(event)
 
-        # 入力エリアに初期フォーカスをセット
-        self.input_area.focus_set()
+    def adjust_input_area_height(self):
+        document_height = self.input_area.document().size().height()
+        self.input_area.setFixedHeight(int(document_height) + 10)
 
-        # Ctrl + Enterでメッセージ送信をバインド
-        self.input_area.bind("<Control-Return>", self.ctrl_enter_pressed)
+    def start_worker_thread(self):
+        if self.is_sending:  # 送信中は処理を行わない
+            return
 
-        # 送信ボタン (ttk.Buttonでスタイルを改善)
-        self.send_button = ttk.Button(
-            root,
-            text="送信",
-            command=self.start_async_send_message,
-            style="Accent.TButton",
-        )
-        self.send_button.grid(row=1, column=1, padx=10, pady=10)
-
-        # ウィンドウ内のグリッドのサイズを柔軟に
-        self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
-
-    # チャットにメッセージを追加する関数（区切り線追加）
-    def add_message(self, message, sender):
-        self.chat_area.config(state="normal")
-        # 発言の前に区切り線を挿入
-        self.chat_area.insert(tk.END, f"\n{'-'*50}\n")
-        self.chat_area.insert(tk.END, f"{sender}: {message}\n")
-        self.chat_area.config(state="disabled")
-        self.chat_area.yview(tk.END)  # 自動スクロール
-
-    # ストリームの部分的な応答を追加する関数
-    def stream_response_update(self, chunk):
-        self.chat_area.config(state="normal")
-        self.chat_area.insert(tk.END, chunk)  # 部分的な応答を追加
-        self.chat_area.config(state="disabled")
-        self.chat_area.yview(tk.END)
-
-    # コードブロックを表示する関数
-    def add_code_block(self, code):
-        self.code_text = code  # コードブロックのテキストを保存
-        self.chat_area.config(state="normal")
-        self.chat_area.insert(
-            tk.END, f"\n```{code}```\n", "code_block"
-        )  # コードブロック表示
-        self.chat_area.tag_configure(
-            "code_block",
-            background="#f0f0f0",
-            foreground="black",
-            font=("Consolas", 10),
-        )
-        self.chat_area.config(state="disabled")
-        self.chat_area.yview(tk.END)
-
-    # Ctrl + Enterが押されたときの処理
-    def ctrl_enter_pressed(self, event):
-        self.start_async_send_message()
-        return "break"  # 通常の改行動作を防ぐ
-
-    # メッセージ送信時の非同期処理を開始する
-    def start_async_send_message(self):
-        # 送信ボタンを無効化
-        self.send_button.config(state="disabled")
-        Thread(target=self.async_send_message).start()
-
-    # 非同期でメッセージ送信処理を実行する
-    def async_send_message(self):
-        asyncio.run(self.send_message())
-
-    # メッセージ送信時の処理
-    async def send_message(self):
-        user_message = self.input_area.get(
-            "1.0", tk.END
-        ).strip()  # 入力エリアのテキストを取得
+        user_message = self.input_area.toPlainText().strip()
         if user_message:
-            self.add_message(user_message, "ユーザー")  # ユーザーのメッセージを追加
-            self.input_area.delete("1.0", tk.END)  # 入力エリアをクリア
+            self.is_sending = True  # 送信中フラグをセット
+            self.send_button.setEnabled(False)  # 送信ボタンを無効化
+            self.input_area.setEnabled(False)  # 入力エリアを無効化
+            self.add_message(user_message, "User")
+            self.input_area.clear()
+            self.input_area.setFixedHeight(30)
+            self.add_message("", "AI")
+            self.worker = WorkerThread(user_message)
+            self.worker.update_signal.connect(self.stream_response_update)
+            self.worker.finished.connect(self.on_worker_finished)  # 終了時の処理
+            self.worker.start()
 
-            # "読み込み中..."メッセージを追加
-            self.add_message("読み込み中...", "AI")
+    def add_message(self, message, sender):
+        if sender == "User":
+            self.chat_area.append(f"User: {message}")
+        else:
+            self.chat_area.append(f"AI: {message}")
 
-            # 非同期でAIからの返答を取得 (ストリーム対応)
-            await asyncio.to_thread(
-                chat_claude, user_message, memory, self.stream_response_update
-            )
+    def stream_response_update(self, response_chunk):
+        cursor = self.chat_area.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertText(response_chunk.strip())
+        self.chat_area.ensureCursorVisible()
 
-            # "読み込み中..."を削除
-            self.chat_area.config(state="normal")
-            self.chat_area.delete("end-2l", "end-1l")  # 読み込み中...の行を削除
-            self.chat_area.config(state="disabled")
+    def on_worker_finished(self):
+        """AIの返答が完了したときに呼ばれる関数"""
+        self.is_sending = False  # 送信中フラグをリセット
+        self.send_button.setEnabled(True)  # 送信ボタンを再び有効化
+        self.input_area.setEnabled(True)  # 入力エリアを再び有効化
+        self.input_area.setFocus()  # フォーカスを入力エリアに戻す
 
-        # 全ての処理が終わった後に送信ボタンを再度有効化
-        self.send_button.config(state="normal")
+
+def launch_gui_window():
+    app = QApplication(sys.argv)
+    window = ChatWindow()
+    window.show()
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    chat_gui = ChatGUI(root)
-    root.mainloop()
+    launch_gui_window()
